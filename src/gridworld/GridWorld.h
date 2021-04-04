@@ -19,10 +19,9 @@
 #include "AgentType.h"
 #include "RenderGenerator.h"
 #include "RewardEngine.h"
-
+#include "GridWorldTracker.h"
 namespace magent {
 namespace gridworld {
-
 
 // the statistical recorder
 struct StatRecorder {
@@ -125,6 +124,7 @@ private:
     // statistic recorder
     StatRecorder stat_recorder;
     int *counter_x, *counter_y;
+    TraceTracker logger;
 };
 
 

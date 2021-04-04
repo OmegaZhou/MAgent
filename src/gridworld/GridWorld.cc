@@ -454,6 +454,7 @@ void GridWorld::set_action(GroupHandle group, const int *actions) {
 }
 
 void GridWorld::step(int *done) {
+    logger.newStep();
     #pragma omp declare reduction (merge : std::vector<RenderAttackEvent> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
     const bool stat = false;
 
@@ -486,10 +487,11 @@ void GridWorld::step(int *done) {
 
         if (obj_pos == -1) {  // attack blank block
             agent->add_reward(agent->get_type().attack_penalty);
+
             continue;
         }
 
-        if (stat) {
+        if (stat&&obj_pos!=-1) {
             attack_obj_counter[obj_pos]++;
         }
 
@@ -497,10 +499,23 @@ void GridWorld::step(int *done) {
         GroupHandle dead_group = -1;
         #pragma omp critical
         {
-            reward = map.do_attack(agent, obj_pos, dead_group);
-            if (dead_group != -1) {
-                groups[dead_group].inc_dead_ct();
+            Agent* obj;
+            if(obj_pos!=-1){
+                obj=map.getAgent(obj_pos);
+                reward = map.do_attack(agent, obj_pos, dead_group);
+                if (dead_group != -1) {
+                    groups[dead_group].inc_dead_ct();
+                }
             }
+            logger.attack(agent,Position{obj_x,obj_y},
+                reward + agent->get_type().attack_penalty,dead_group!=-1,obj_pos==-1);
+            if(dead_group!=-1&&obj!=nullptr){
+                logger.dead(obj,TraceInfo::DeadReason::BE_ATTACKED);
+            }
+            
+        }
+        if(obj_pos==-1){
+            continue;
         }
         agent->add_reward(reward + agent->get_type().attack_penalty);
     }
@@ -532,10 +547,15 @@ void GridWorld::step(int *done) {
                 continue;
 
             // alive agents
+            int old_hp=agent->get_hp();
             bool starve = agent->starve();
             if (starve) {
                 map.remove_agent(agent);
                 starve_ct++;
+            }
+            #pragma omp critical
+            {
+                logger.starve(agent,old_hp);
             }
         }
         group.set_dead_ct(group.get_dead_ct() + starve_ct);
@@ -543,7 +563,7 @@ void GridWorld::step(int *done) {
 
     if (turn_mode) {
         // do turn
-        auto do_turn_for_a_buffer = [] (std::vector<TurnAction> &turn_buf, Map &map) {
+        auto do_turn_for_a_buffer = [] (std::vector<TurnAction> &turn_buf, Map &map,TraceTracker& logger) {
             //std::random_shuffle(turn_buf.begin(), turn_buf.end());
             size_t turn_size = turn_buf.size();
             for (int i = 0; i < turn_size; i++) {
@@ -553,8 +573,16 @@ void GridWorld::step(int *done) {
                 if (agent->is_dead())
                     continue;
 
+                Position old_p=agent->get_pos();
+                Direction old_dir=agent->get_dir();
+
                 int dir = act * 2 - 1;
                 map.do_turn(agent, dir);
+                #pragma omp critical
+                {
+                    logger.turnWise(agent,dir,old_p,old_dir);
+                }
+                
             }
             turn_buf.clear();
         };
@@ -563,15 +591,15 @@ void GridWorld::step(int *done) {
             LOG(TRACE) << "turn parallel.  ";
             #pragma omp parallel for
             for (int i = 0; i < NUM_SEP_BUFFER; i++) {        // turn in separate areas, do them in parallel
-                do_turn_for_a_buffer(turn_buffers[i], map);
+                do_turn_for_a_buffer(turn_buffers[i], map,logger);
             }
         }
         LOG(TRACE) << "turn boundary.   ";
-        do_turn_for_a_buffer(turn_buffer_bound, map);
+        do_turn_for_a_buffer(turn_buffer_bound, map,logger);
     }
 
     // do move
-    auto do_move_for_a_buffer = [] (std::vector<MoveAction> &move_buf, Map &map) {
+    auto do_move_for_a_buffer = [] (std::vector<MoveAction> &move_buf, Map &map,TraceTracker& logger) {
         //std::random_shuffle(move_buf.begin(), move_buf.end());
         size_t move_size = move_buf.size();
         for (int j = 0; j < move_size; j++) {
@@ -596,8 +624,13 @@ void GridWorld::step(int *done) {
                 default:
                     LOG(FATAL) << "invalid direction in GridWorld::step when do move";
             }
-
+            Position old_pos=agent->get_pos();
             map.do_move(agent, delta);
+            #pragma omp critical
+            {
+                logger.move(agent,old_pos);
+            }
+            
         }
         move_buf.clear();
     };
@@ -606,11 +639,11 @@ void GridWorld::step(int *done) {
         LOG(TRACE) << "move parallel.  ";
         #pragma omp parallel for
         for (int i = 0; i < NUM_SEP_BUFFER; i++) {    // move in separate areas, do them in parallel
-            do_move_for_a_buffer(move_buffers[i], map);
+            do_move_for_a_buffer(move_buffers[i], map,logger);
         }
     }
     LOG(TRACE) << "move boundary.  ";
-    do_move_for_a_buffer(move_buffer_bound, map);
+    do_move_for_a_buffer(move_buffer_bound, map,logger);
 
     LOG(TRACE) << "calc_reward.  ";
     calc_reward();

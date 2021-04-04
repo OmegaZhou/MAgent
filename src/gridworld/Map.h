@@ -39,7 +39,10 @@ public:
         delete [] slots;
         delete [] channel_ids;
     }
-
+    Agent* getAgent(PositionInteger pos){
+        Agent *obj = ((Agent *)slots[pos].occupier);
+        return obj;
+    }
     void reset(int width, int height, bool food_mode);
 
     Position get_random_blank(std::default_random_engine &random_engine, int width=1, int height=1);
