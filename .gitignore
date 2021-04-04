@@ -10,3 +10,4 @@ build
 __pycache__
 save_video
 save_model
+trace
